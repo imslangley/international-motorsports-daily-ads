@@ -1,0 +1,12 @@
+{
+  "inventory_url": "https://www.internationalmotorsports.com/inventory/2024-mv-agusta-lxp-langley-bc-v1m-4c2-12266444i",
+  "stock_number": "2024 LXP ORIOLI",
+  "year": "2024",
+  "make": "MV Agusta",
+  "model": "LXP",
+  "trim": "Orioli",
+  "sale_price": "19998",
+  "regular_price": "34998",
+  "savings": "15000",
+  "_note": "Optional but recommended. inventory_url is the one field that matters - it removes all ambiguity about which unit this package is for."
+}
