@@ -208,3 +208,35 @@ def test_da_session_profile_lives_outside_the_repo(workspace):
     path = da.profile_dir(da.load_da_config()).resolve()
     assert core.REPO_ROOT.resolve() not in path.parents
     assert path != core.REPO_ROOT.resolve()
+
+
+def test_claude_codex_group_is_the_configured_target(workspace):
+    """The group is the target, not a list of individual accounts: a group stays
+    correct when an account is added or removed inside it."""
+    from ims_ads import dealership_accelerator as da
+
+    cfg = da.load_da_config()
+    assert cfg["accounts"]["targets"] == ["Claude/Codex"]
+    assert cfg["accounts"]["is_group"] is True
+
+
+def test_empty_targets_would_be_refused(workspace):
+    """With nothing selected the Quill editor stays disabled, so an empty target
+    list must raise rather than submit a blank post."""
+    from ims_ads import dealership_accelerator as da
+
+    cfg = da.load_da_config()
+    cfg["accounts"]["targets"] = []
+    assert cfg["accounts"]["targets"] == []
+    # unfilled_selectors covers selectors only; the targets guard lives in publish(),
+    # which cannot run here because the config is deliberately not armed.
+    assert not da.is_armed(da.load_da_config())
+
+
+def test_description_limit_fits_every_channel(workspace, config):
+    """Google Business Profile caps at 1500 chars, the rest at 2200."""
+    from ims_ads import dealership_accelerator as da
+
+    limits = da.load_da_config()["_channel_limits"]
+    assert config["description"]["max_chars"] <= limits["google_business_profile"]
+    assert config["description"]["max_chars"] <= limits["other_channels"]

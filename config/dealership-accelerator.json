@@ -1,6 +1,5 @@
 {
   "_comment": "Dealership Accelerator is GoHighLevel, white-labelled by Envoke Digital. Captured from the live UI on 2026-09-16. NO CREDENTIALS IN THIS FILE - the signed-in session lives in a browser profile outside the repo.",
-
   "_the_better_path": [
     "Because DA is GoHighLevel, the LeadConnector REST API would do all of this with",
     "no browser at all - far more reliable than driving the UI. It is blocked only",
@@ -10,23 +9,18 @@
     "the scopes social-media-posting.write and medias.write, then switch",
     "publishing.platform to 'gohighlevel' and this whole file stops mattering."
   ],
-
   "_comment_armed": "Selectors were captured from the live UI, but posting has NEVER been exercised end to end - doing that means publishing a real ad. While armed is false the adapter refuses to click Post and tells you what to do instead. Set it to true only after one supervised test post has gone through.",
   "armed": false,
-
   "location_id": "TfYNq7UU87ZNWFKsZNRn",
-
   "urls": {
     "login": "https://app.envokedigital.com/",
     "post_composer": "https://app.envokedigital.com/v2/location/TfYNq7UU87ZNWFKsZNRn/marketing/social-planner/post",
     "planner": "https://app.envokedigital.com/v2/location/TfYNq7UU87ZNWFKsZNRn/marketing/social-planner"
   },
-
   "session": {
     "_comment": "Holds live session cookies. Kept outside the repo on purpose. Blank uses ~/.ims-ads/da-profile.",
     "profile_dir": ""
   },
-
   "selectors": {
     "_comment": "The sp-cmp-* ids are GoHighLevel component ids and are stabler than class names. ORDER MATTERS - see _sequence below.",
     "account_picker": "#sp-cmp-social-select-trigger-select",
@@ -37,9 +31,10 @@
     "save_draft_button": "#sp-cmp-post-action-btn-save-draft",
     "signed_out_marker": "input[type=password]",
     "success_marker": "",
-    "post_link": ""
+    "post_link": "",
+    "group_row": "text=Claude/Codex",
+    "customize_per_channel_toggle": "text=Customize for each channel"
   },
-
   "_sequence": [
     "1. Load urls.post_composer.",
     "2. Click account_picker and choose the target social accounts. The caption editor",
@@ -56,17 +51,37 @@
     "publishing a real post, which has not been done. Until they are filled the",
     "adapter cannot verify a post succeeded - it will say so rather than assume."
   ],
-
   "accounts": {
-    "_comment": "Which connected social accounts to post to, by their display name in the picker. Empty means every connected account. Fill after confirming the names in the picker.",
-    "targets": []
+    "_comment": "Claude/Codex is a GROUP (listed under the GROUPS heading in the picker, above ALL ACCOUNTS). Selecting the group selects every account inside it, so this stays correct when an account is added or removed there - which is exactly why a group beats listing accounts individually.",
+    "targets": [
+      "Claude/Codex"
+    ],
+    "is_group": true,
+    "_covers": [
+      "Google Business Profile x2 (15017755070398907070, 02652279104002366868)",
+      "Facebook  - International Motorsports Motorcycle Company",
+      "Instagram - internationalmotorsports",
+      "LinkedIn"
+    ]
   },
-
   "timeouts": {
     "nav_ms": 90000,
     "action_ms": 30000,
     "editor_enable_ms": 20000,
     "upload_ms": 30000,
     "confirm_ms": 10000
-  }
+  },
+  "_channel_limits": {
+    "_comment": "Character limits shown in the composer. description.max_chars in config.json is 1200, which is inside every one of these.",
+    "google_business_profile": 1500,
+    "other_channels": 2200
+  },
+  "_google_business_profile_options": [
+    "GBP posts have a REQUIRED 'Type' field (seen set to 'Call to Action') plus an",
+    "optional 'Select button label'. Because two Google Business Profiles are in the",
+    "Claude/Codex group, every post through this group will hit that requirement.",
+    "This has NOT been automated - the dropdown options were never opened, and",
+    "guessing at them would mean submitting a post with a field set wrongly.",
+    "Capture them on the first supervised post, then add them here."
+  ]
 }

@@ -229,20 +229,36 @@ def publish(unit: Unit, graphic: Path, description: str, *,
                     '  "targets": ["International Motorsports", "@intlmotorsports"]'
                 )
 
-            log.info("Selecting %d social account(s)", len(targets))
+            is_group = bool(cfg.get("accounts", {}).get("is_group"))
+            log.info("Selecting %s: %s",
+                     "group" if is_group else "account(s)", ", ".join(targets))
             page.click(sel["account_picker"], timeout=int(t.get("action_ms", 30000)))
             page.wait_for_timeout(1500)
+
             for name in targets:
                 try:
-                    page.get_by_text(name, exact=False).first.click(
+                    # A group sits under the GROUPS heading, above ALL ACCOUNTS, and
+                    # ticking it selects every account inside - so the post follows
+                    # whatever the group contains rather than a list that goes stale.
+                    page.get_by_text(name, exact=True).first.click(
                         timeout=int(t.get("action_ms", 30000)))
                 except Exception as exc:
                     raise DealershipAcceleratorError(
-                        f"No account matching '{name}' in the picker. Check "
-                        f"accounts.targets against the names shown in the composer."
+                        f"No {'group' if is_group else 'account'} named '{name}' in "
+                        f"the picker. Check accounts.targets against the names shown "
+                        f"in the composer's 'Select a social account' list."
                     ) from exc
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(700)
             page.keyboard.press("Escape")
+
+            # The Claude/Codex group contains two Google Business Profiles, and a GBP
+            # post has a REQUIRED 'Type' field. That dropdown has never been opened,
+            # so it is not filled here - submitting with it unset will fail, which is
+            # one of the things the first supervised post needs to sort out.
+            if cfg.get("_google_business_profile_options"):
+                log.warning("Google Business Profile options are not automated. If the "
+                            "post is rejected for a missing 'Type', capture that "
+                            "dropdown and add it to the config.")
 
             # 2. Wait for Quill to actually enable before typing into it.
             check = sel.get("caption_enabled_check") or sel["caption_field"]
