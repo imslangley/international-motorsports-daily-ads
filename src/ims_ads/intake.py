@@ -20,6 +20,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from . import media
 from .core import REPO_ROOT, Unit, get_logger
 from .inventory import InventoryError, fetch_unit_by_url, fetch_units
 from .packaging import (DESCRIPTION_FILE, GRAPHIC_FILE, LISTING_FILE, list_packages,
@@ -145,7 +146,8 @@ def resolve_unit(pkg: Path, config: dict) -> tuple[Unit, str]:
 
 
 def intake_package(pkg: Path, config: dict, *, dry_run: bool = False) -> Unit:
-    """Ties a supplied package to its live listing and writes listing.json."""
+    """Ties a supplied package to its live listing, downloads the exact-unit photo,
+    and writes listing.json."""
     log = get_logger()
     try:
         unit, how = resolve_unit(pkg, config)
@@ -153,8 +155,29 @@ def intake_package(pkg: Path, config: dict, *, dry_run: bool = False) -> Unit:
         raise IntakeError(f"{pkg.name}: {exc}") from exc
 
     log.info("%s: verified against the live listing (%s)", pkg.name, how)
-    if not dry_run:
-        write_listing(pkg, unit)
-        from .packaging import append_approval
-        append_approval(pkg, f"Intake: unit resolved via {how}")
+    if dry_run:
+        return unit
+
+    from .packaging import SOURCE_IMAGE_STEM, append_approval
+
+    write_listing(pkg, unit)
+    append_approval(pkg, f"Intake: unit resolved via {how}")
+
+    # The spec requires the package to carry the exact-unit source image, and it is
+    # also the evidence that this unit has a real photo of itself rather than only
+    # manufacturer catalog shots. ChatGPT's package has the finished graphic but not
+    # this, so it is fetched here from the unit's own listing.
+    if not any(pkg.glob(f"{SOURCE_IMAGE_STEM}.*")):
+        try:
+            image_url, _ = media.choose_exact_unit_image(unit, config)
+            setattr(unit, "_chosen_image_url", image_url)
+            media.download_image(image_url, pkg / SOURCE_IMAGE_STEM, config)
+            write_listing(pkg, unit)
+            append_approval(pkg, f"Intake: exact-unit photo downloaded from {image_url}")
+        except media.ImageError as exc:
+            # Not fatal here: validation reports the missing source image, so the
+            # package is blocked with a clear reason rather than dying mid-intake.
+            log.error("%s: exact-unit photo unavailable\n%s", pkg.name, exc)
+            append_approval(pkg, f"Intake: no exact-unit photo - {exc}".replace("\n", " "))
+
     return unit

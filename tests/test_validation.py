@@ -291,3 +291,73 @@ def test_composer_refuses_without_branding_rather_than_faking_it(workspace, conf
 
     with pytest.raises(ImageError, match="Branding asset missing"):
         compose_graphic(unit, source, tmp_path / "out.png", config)
+
+
+# ------------------------------------------------- regressions from live testing
+
+def test_package_does_not_match_itself_as_a_duplicate(workspace, config):
+    """A package sitting in inbox/ was matching itself on every identifier, which
+    made it impossible for anything to ever be promoted."""
+    from ims_ads.dedupe import find_duplicates
+
+    pkg, unit = build_complete_package(workspace, config)
+    assert find_duplicates(unit, exclude=pkg) == []
+    # Without the exclusion it still finds itself - that is what the bug was.
+    assert find_duplicates(unit) != []
+
+
+def test_validate_package_excludes_itself(workspace, config):
+    pkg, _ = build_complete_package(workspace, config)
+    report, _ = validate_package(pkg, config, check_duplicates=True)
+    dupe = [c for c in report.checks if c.name == "duplicate.check"]
+    assert dupe and dupe[0].passed, dupe[0].detail if dupe else "no duplicate check ran"
+
+
+def test_a_genuine_duplicate_in_another_folder_is_still_caught(workspace, config):
+    """The self-exclusion must not blind the check to real duplicates."""
+    from ims_ads.dedupe import find_duplicates
+
+    first, _ = build_complete_package(workspace, config, state="ready")
+    second, unit = build_complete_package(workspace, config, state="inbox")
+    matches = find_duplicates(unit, exclude=second)
+    assert matches, "a copy sitting in ready/ must still register"
+    assert any("ready" in m.where for m in matches)
+
+
+@pytest.mark.parametrize("text,sale,regular,savings", [
+    ("On Sale $19,998 Was $34,998 Save $15,000", 19998.0, 34998.0, 15000.0),
+    ("On Sale $13,995.00\nWas $29,998\nSave $16,003", 13995.0, 29998.0, 16003.0),
+    ("On Sale $9,999 MSRP $12,499", 9999.0, 12499.0, 2500.0),
+])
+def test_unit_page_price_box_is_parsed(text, sale, regular, savings):
+    """The unit page carries all three figures in one .price-box, with different
+    class names from the search card. Reading only the search-card classes lost the
+    savings silently and blocked every package."""
+    from ims_ads.core import Unit
+    from ims_ads.inventory import _apply_price_box
+
+    unit = Unit()
+    assert _apply_price_box(unit, text) is True
+    assert unit.sale_price == sale
+    assert unit.regular_price == regular
+    assert unit.savings == savings
+
+
+def test_price_box_with_only_a_sale_price_does_not_invent_savings():
+    from ims_ads.core import Unit
+    from ims_ads.inventory import _apply_price_box
+
+    unit = Unit()
+    _apply_price_box(unit, "On Sale $9,999")
+    assert unit.sale_price == 9999.0
+    assert unit.regular_price is None
+    assert unit.savings is None
+
+
+def test_empty_price_box_reports_nothing_found():
+    from ims_ads.core import Unit
+    from ims_ads.inventory import _apply_price_box
+
+    unit = Unit()
+    assert _apply_price_box(unit, "") is False
+    assert unit.sale_price is None

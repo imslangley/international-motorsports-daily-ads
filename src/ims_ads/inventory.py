@@ -80,8 +80,13 @@ DETAIL_JS = r"""
     breadcrumbs: [...new Set(crumbs)],
     vin: vin,
     page_title: document.title || '',
-    sale_raw: (document.querySelector('.result-saleprice, [class*=saleprice]') || {}).innerText || '',
-    save_raw: (document.querySelector('.sale-regular-price, [class*=regular-price]') || {}).innerText || '',
+    // The unit page puts all three figures in one .price-box:
+    //   "On Sale $19,998  Was $34,998  Save $15,000"
+    // The search card uses different classes (.result-saleprice / .sale-regular-price),
+    // so reading only those here loses the savings silently.
+    price_box: (document.querySelector('.price-box') || {}).innerText || '',
+    sale_raw: (document.querySelector('.price-label, .result-saleprice, [class*=saleprice]') || {}).innerText || '',
+    save_raw: (document.querySelector('.old-price, .sale-regular-price, [class*=regular-price]') || {}).innerText || '',
     dom_images: [...new Set(domImages)].slice(0, 12),
   };
 }
@@ -105,6 +110,44 @@ def _parse_title(title: str) -> tuple[str, str, str]:
     if not year_match:
         return "", "", cleaned
     return year_match.group(1), "", year_match.group(2).strip()
+
+
+def _apply_price_box(unit: Unit, text: str) -> bool:
+    """Reads 'On Sale $19,998 Was $34,998 Save $15,000' off a unit page.
+
+    Returns True when it found a sale price. Taking all three from one labelled
+    block is steadier than three separate selectors, and gives the regular price
+    from the listing itself instead of inferring it.
+    """
+    if not text:
+        return False
+    flat = re.sub(r"\s+", " ", text)
+
+    def grab(label: str) -> float | None:
+        # The label is wrapped in a non-capturing group. Without it an alternation
+        # like "was|msrp|regular" binds only its last branch to the money pattern,
+        # and group(1) comes back None for the other branches.
+        m = re.search(r"(?:" + label + r")\s*\$\s?([\d,]+(?:\.\d{1,2})?)", flat, re.I)
+        if not m or m.group(1) is None:
+            return None
+        try:
+            return float(m.group(1).replace(",", ""))
+        except ValueError:
+            return None
+
+    sale = grab(r"on sale")
+    was = grab(r"was|msrp|regular")
+    save = grab(r"save")
+
+    if sale is not None:
+        unit.sale_price = sale
+    if was is not None:
+        unit.regular_price = was
+    if save is not None:
+        unit.savings = save
+    if unit.savings is None and None not in (unit.sale_price, unit.regular_price):
+        unit.savings = unit.regular_price - unit.sale_price
+    return sale is not None
 
 
 def _apply_prices(unit: Unit, sale_raw: str, save_raw: str) -> None:
@@ -360,7 +403,10 @@ def enrich_unit(browser, unit: Unit, inv: dict) -> None:
         if crumbs:
             unit.model = html.unescape(crumbs[-1])
 
-    _apply_prices(unit, data.get("sale_raw", ""), data.get("save_raw", ""))
+    # The price box is authoritative on a unit page; fall back to the loose
+    # selectors only when it is absent.
+    if not _apply_price_box(unit, data.get("price_box", "")):
+        _apply_prices(unit, data.get("sale_raw", ""), data.get("save_raw", ""))
 
     if not unit.image_urls:
         unit.image_urls = [u for u in (data.get("dom_images") or []) if u]

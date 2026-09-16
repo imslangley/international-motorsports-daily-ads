@@ -93,8 +93,9 @@ def validate_freshness(unit: Unit, config: dict, report: ValidationReport) -> No
 
 
 def validate_duplicates(unit: Unit, report: ValidationReport,
-                        allow_rerun: bool = False) -> None:
-    matches = find_duplicates(unit)
+                        allow_rerun: bool = False,
+                        exclude: Path | None = None) -> None:
+    matches = find_duplicates(unit, exclude=exclude)
     if allow_rerun:
         report.add("duplicate.check", True,
                    f"rerun approved; {len(matches)} prior record(s) ignored",
@@ -170,7 +171,8 @@ def validate_package(pkg: Path, config: dict, *,
     validate_unit_fields(unit, config, report)
     validate_freshness(unit, config, report)
     if check_duplicates:
-        validate_duplicates(unit, report, allow_rerun=allow_rerun)
+        # `pkg` is excluded so a package in inbox/ does not match itself.
+        validate_duplicates(unit, report, allow_rerun=allow_rerun, exclude=pkg)
     validate_media(pkg, unit, config, report)
     validate_copy(pkg, unit, config, report)
 

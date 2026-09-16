@@ -15,6 +15,7 @@ been published.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from .core import STATE_DIRS, Unit, get_logger
 from .packaging import read_history, read_listing
@@ -83,10 +84,16 @@ def check_history(unit: Unit) -> list[DuplicateMatch]:
     return matches
 
 
-def check_folders(unit: Unit, states: tuple[str, ...] = ACTIVE_STATES) -> list[DuplicateMatch]:
-    """Searches live package folders for the same unit."""
+def check_folders(unit: Unit, states: tuple[str, ...] = ACTIVE_STATES,
+                  exclude: "Path | None" = None) -> list[DuplicateMatch]:
+    """Searches live package folders for the same unit.
+
+    `exclude` is the package currently being validated. Without it a package sitting
+    in inbox/ matches itself on every identifier and can never be promoted.
+    """
     matches: list[DuplicateMatch] = []
     log = get_logger()
+    exclude = exclude.resolve() if exclude else None
 
     for state in states:
         root = STATE_DIRS[state]
@@ -94,6 +101,8 @@ def check_folders(unit: Unit, states: tuple[str, ...] = ACTIVE_STATES) -> list[D
             continue
         for pkg in root.iterdir():
             if not pkg.is_dir():
+                continue
+            if exclude and pkg.resolve() == exclude:
                 continue
             try:
                 other = read_listing(pkg)
@@ -113,9 +122,9 @@ def check_folders(unit: Unit, states: tuple[str, ...] = ACTIVE_STATES) -> list[D
     return matches
 
 
-def find_duplicates(unit: Unit) -> list[DuplicateMatch]:
+def find_duplicates(unit: Unit, exclude: "Path | None" = None) -> list[DuplicateMatch]:
     """Every duplicate signal for this unit, de-duplicated by (field, where)."""
-    all_matches = check_history(unit) + check_folders(unit)
+    all_matches = check_history(unit) + check_folders(unit, exclude=exclude)
     seen: set[tuple[str, str]] = set()
     unique: list[DuplicateMatch] = []
     for match in all_matches:
@@ -127,8 +136,8 @@ def find_duplicates(unit: Unit) -> list[DuplicateMatch]:
     return unique
 
 
-def is_duplicate(unit: Unit) -> bool:
-    return bool(find_duplicates(unit))
+def is_duplicate(unit: Unit, exclude: "Path | None" = None) -> bool:
+    return bool(find_duplicates(unit, exclude=exclude))
 
 
 def first_eligible(units: list[Unit], *, allow_rerun: bool = False) -> tuple[Unit | None, list[str]]:
