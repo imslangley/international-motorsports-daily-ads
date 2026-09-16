@@ -1,0 +1,97 @@
+{
+  "_comment": "Workflow configuration. No secrets live here - those come from .env. See README.md.",
+
+  "business": {
+    "name": "International Motorsports",
+    "legal_name": "International Motorsports Motorcycle Co.",
+    "phone": "778-653-5702",
+    "website": "https://www.internationalmotorsports.com",
+    "tagline": "Peace & Grease Since 2003",
+    "ship_line": "WE SHIP EVERYWHERE",
+    "stores": ["Langley", "Chilliwack"]
+  },
+
+  "inventory": {
+    "_comment": "The site blocks plain HTTP clients (403), so a real browser is required. headless=false is the tested-reliable setting; headless sometimes gets rate-limited. Raise wait_ms on a slow connection.",
+    "search_url": "https://www.internationalmotorsports.com/search/inventory/availability/In%20Stock/usage/New/sort/discount",
+    "browser_channel": "chrome",
+    "headless": false,
+    "nav_timeout_ms": 60000,
+    "results_timeout_ms": 30000,
+    "detail_timeout_ms": 20000,
+    "retry_attempts": 4,
+    "retry_backoff_ms": 20000,
+    "settle_ms": 3000,
+    "scroll_passes": 6,
+    "max_units": 60,
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+    "locale": "en-CA"
+  },
+
+  "selection": {
+    "_comment": "Units are taken in the site's own order (highest discount first). A unit must clear every rule here to be eligible.",
+    "require_sale_price": true,
+    "require_savings": true,
+    "min_savings_dollars": 500,
+    "require_stock_or_vin": true,
+    "require_exact_unit_image": true,
+    "exclude_title_keywords": ["sold", "coming soon", "on order", "demo unit"],
+    "max_candidates_to_inspect": 12
+  },
+
+  "image": {
+    "_comment": "The exact-unit photo is downloaded from the unit's own listing. Nothing else is ever substituted.",
+    "min_source_width": 600,
+    "min_source_height": 400,
+    "reject_filename_patterns": ["chatgpt", "ai-generated", "placeholder", "coming-soon", "no-photo", "stock-photo"],
+    "output_width": 1080,
+    "output_height": 1080
+  },
+
+  "graphic": {
+    "_comment": "Fallback composer, used only when production.mode is 'produce' and no finished graphic was supplied. Requires assets/brand/logo.png - see README.",
+    "background": "#FFFFFF",
+    "text_color": "#111111",
+    "accent_color": "#C8102E",
+    "logo_path": "assets/brand/logo.png",
+    "logo_width_pct": 26,
+    "margin_pct": 5,
+    "font_candidates": [
+      "C:/Windows/Fonts/segoeuib.ttf",
+      "C:/Windows/Fonts/arialbd.ttf",
+      "C:/Windows/Fonts/calibrib.ttf"
+    ]
+  },
+
+  "production": {
+    "_comment": "'validate_only' = ChatGPT supplies the finished graphic and description; this system verifies and promotes them. 'produce' = this system builds them from the verified listing. See the note in README about which the spec intends.",
+    "mode": "validate_only",
+    "description_provider": "supplied"
+  },
+
+  "description": {
+    "_comment": "Applies when production.mode = 'produce'. 'template' needs no API key; 'openai' needs OPENAI_API_KEY.",
+    "provider": "template",
+    "openai_model": "gpt-4o",
+    "max_chars": 1200,
+    "required_phrases": ["WE SHIP EVERYWHERE", "International Motorsports"],
+    "banned_patterns": [
+      "in stock now",
+      "units available",
+      "limited stock",
+      "while supplies last"
+    ]
+  },
+
+  "publishing": {
+    "_comment": "No platform is wired until one is chosen and credentials are supplied. 'none' means the workflow stops at ready/ and publishing is recorded manually.",
+    "platform": "none",
+    "require_manual_approval": true
+  },
+
+  "validation": {
+    "listing_max_age_hours": 24,
+    "require_price_agreement": true,
+    "require_url_in_description": true
+  }
+}

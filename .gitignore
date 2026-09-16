@@ -1,0 +1,36 @@
+# Secrets - never commit
+.env
+*.env
+!.env.example
+config/credentials.json
+*.pem
+*.key
+cookies.json
+auth.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Runtime output
+logs/*.log
+logs/*.jsonl
+!logs/.gitkeep
+.cache/
+*.tmp
+
+# Workflow folders keep their structure, not their contents
+inbox/*
+ready/*
+published/*
+issues/*
+archive/*
+!*/.gitkeep
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
