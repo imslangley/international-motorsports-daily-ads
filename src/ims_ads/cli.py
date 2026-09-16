@@ -216,6 +216,24 @@ def cmd_sync(args, config) -> int:
 
     for pkg in supplied:
         log.info("\n=== %s ===", pkg.name)
+
+        # An incomplete folder is reported, never skipped. Silently ignoring one
+        # means a bad push sits in inbox/ unnoticed and the day produces nothing.
+        gaps = intake.missing_required_files(pkg)
+        if gaps:
+            log.error("%s is not a complete package - missing %s",
+                      pkg.name, ", ".join(gaps))
+            if not args.dry_run:
+                packaging.write_issue_note(pkg.name, [
+                    *(f"missing required file: {g}" for g in gaps),
+                    "A package needs graphic.png (exactly 1080x1080) and "
+                    "description.txt containing the unit's inventory URL.",
+                    "See docs/example-package/ for the exact shape."])
+                packaging.move_package(pkg.name, "issues",
+                                       reason="incomplete package")
+            worst = max(worst, 1)
+            continue
+
         try:
             unit = intake.intake_package(pkg, config, dry_run=args.dry_run)
         except intake.IntakeError as exc:

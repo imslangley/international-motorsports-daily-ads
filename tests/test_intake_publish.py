@@ -240,3 +240,43 @@ def test_description_limit_fits_every_channel(workspace, config):
     limits = da.load_da_config()["_channel_limits"]
     assert config["description"]["max_chars"] <= limits["google_business_profile"]
     assert config["description"]["max_chars"] <= limits["other_channels"]
+
+
+# ------------------------------------- regression: incomplete packages must be seen
+
+def test_incomplete_package_is_found_not_silently_skipped(workspace):
+    """A folder with only brief.json was being ignored, so a malformed push sat in
+    inbox/ forever while the run reported 'no new packages'."""
+    pkg = workspace / "inbox" / "2026-09-16_TEST_handoff-check"
+    pkg.mkdir(parents=True)
+    (pkg / intake.BRIEF_FILE).write_text('{"test": true}', encoding="utf-8")
+
+    found = intake.find_supplied_packages()
+    assert pkg in found, "an incomplete package must still be picked up"
+
+
+def test_missing_required_files_are_named(workspace):
+    pkg = workspace / "inbox" / "2026-09-16_TEST_handoff-check"
+    pkg.mkdir(parents=True)
+    (pkg / intake.BRIEF_FILE).write_text('{"test": true}', encoding="utf-8")
+
+    gaps = intake.missing_required_files(pkg)
+    assert set(gaps) == {packaging.GRAPHIC_FILE, packaging.DESCRIPTION_FILE}
+
+
+def test_an_empty_folder_is_also_reported(workspace):
+    pkg = workspace / "inbox" / "2026-09-16_empty"
+    pkg.mkdir(parents=True)
+    assert pkg in intake.find_supplied_packages()
+    assert len(intake.missing_required_files(pkg)) == 2
+
+
+def test_a_complete_package_reports_no_gaps(workspace):
+    pkg = supplied_package(workspace, description="see " + LISTING)
+    assert intake.missing_required_files(pkg) == []
+
+
+def test_graphic_without_description_is_incomplete(workspace):
+    """One file present is not a package - the pair is the unit of work."""
+    pkg = supplied_package(workspace)   # graphic only, no description
+    assert intake.missing_required_files(pkg) == [packaging.DESCRIPTION_FILE]

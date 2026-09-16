@@ -67,15 +67,24 @@ def git_sync(*, dry_run: bool = False) -> str:
 
 # ------------------------------------------------------------------ resolve
 
+REQUIRED_FILES = (GRAPHIC_FILE, DESCRIPTION_FILE)
+
+
 def find_supplied_packages() -> list[Path]:
-    """Inbox packages that have creative but no listing.json yet."""
-    out = []
-    for pkg in list_packages("inbox"):
-        if (pkg / LISTING_FILE).exists():
-            continue
-        if (pkg / GRAPHIC_FILE).exists() or (pkg / DESCRIPTION_FILE).exists():
-            out.append(pkg)
-    return out
+    """Every inbox package that has not been taken in yet.
+
+    This deliberately returns folders that are INCOMPLETE as well as good ones.
+    An earlier version only returned folders containing creative, which meant a
+    malformed push sat in inbox/ forever while the run reported "no new packages" -
+    the morning would quietly produce nothing and nobody would know.
+    """
+    return [pkg for pkg in list_packages("inbox")
+            if not (pkg / LISTING_FILE).exists()]
+
+
+def missing_required_files(pkg: Path) -> list[str]:
+    """Required files this package does not have."""
+    return [name for name in REQUIRED_FILES if not (pkg / name).exists()]
 
 
 def url_from_brief(pkg: Path) -> str:
