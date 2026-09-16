@@ -80,10 +80,12 @@ src/ims_ads/
   copywriting.py           description building and agreement checks
   validation.py            every rule that gates ready/
   packaging.py             package layout, state machine, ad-history.csv
-  publishing.py            platform adapters (none wired yet - see below)
+  publishing.py            platform adapters (DA, GHL, Meta)
+  intake.py                takes in what Codex pushes, verifies vs the site
+  dealership_accelerator.py  DA publishing (UI-driven; no API exists)
   cli.py                   the orchestrator
 scripts/Register-Schedule.ps1   the 9:30 AM Windows task
-tests/                     80 tests
+tests/                     96 tests
 ```
 
 A package on disk looks like:
@@ -126,38 +128,62 @@ Everything lives in `config/config.json`. The settings worth knowing:
 | `selection.min_savings_dollars` | Units discounted by less than this are skipped |
 | `selection.require_exact_unit_image` | Skip units whose listing has no photo of themselves |
 | `image.reject_filename_patterns` | Filenames treated as generated or placeholder, never as a unit photo |
-| `production.mode` | `validate_only` or `produce` — see *Who makes the creative* |
-| `publishing.platform` | `none` until a platform is chosen |
+| `production.mode` | `validate_only` (ChatGPT supplies the creative) or `produce` — see *The confirmed execution path* |
+| `publishing.platform` | `dealership_accelerator`. Set to `none` to stop at `ready/` and record publishes by hand |
 
 Secrets never go in this file. They go in `.env`, which is gitignored. Copy `.env.example` and fill in only what you need.
 
-## Who makes the creative
+## The confirmed execution path
 
-**There is a contradiction between this spec and the instructions I was given, and I have not guessed which way it should go.**
+```
+09:30  ChatGPT      creates the ad graphic (1080x1080) and the description
+       Codex        commits the package to inbox/ and pushes to this repo
+       ims-ads sync pulls it, reads that unit's OWN live listing, and verifies
+                    the creative against the site - not against the claim
+                    -> ready/   (everything agrees)
+                    -> issues/  (anything does not, with a dated note)
+       you          review and publish to Dealership Accelerator
+```
 
-- This README, step 3, says *"Codex or Claude Code validates the unit, **creates the graphic and matching description**"*, with ChatGPT preparing a *brief* in step 1.
-- The instruction I was given says ChatGPT creates the graphic and the description.
+`production.mode` is `validate_only`: ChatGPT supplies `graphic.png` and
+`description.txt`; this system never invents either. Set it to `produce` to have this
+system read the site and build the package itself instead (needs `assets/brand/logo.png`).
 
-The system supports both, switched by one setting:
+### What Codex pushes
 
-| `production.mode` | Behaviour |
-| --- | --- |
-| `validate_only` *(current default)* | ChatGPT supplies `graphic.png` and `description.txt` in the package. This system verifies the unit against the live listing, checks the graphic is 1080x1080, checks the copy agrees with the listing, and promotes or blocks. |
-| `produce` | This system downloads the exact-unit photo, composes the 1080x1080 graphic and writes the description from verified listing data. Requires `assets/brand/logo.png`. |
+A folder in `inbox/` named `YYYY-MM-DD_stock-number_year-make-model-trim`, containing:
 
-Say which you want and it is a one-line change. Until then it runs in `validate_only`, the safer of the two.
+| File | Required | Notes |
+| --- | --- | --- |
+| `graphic.png` | yes | exactly 1080x1080 |
+| `description.txt` | yes | **must contain the unit's inventory URL** - that is how the unit is identified |
+| `brief.json` | optional | `{"inventory_url": "..."}` - the most reliable identifier of all |
+
+Intake resolves the unit in this order: `brief.json`, then the inventory URL inside
+`description.txt`, then the stock number in the folder name matched against live
+inventory. If none of the three identifies a real listing, the package goes to
+`issues/` and **no unit is assumed**.
+
+Once the unit is resolved, its live listing is read and `listing.json` is written from
+the site. Every subsequent check compares the creative against that, so stale pricing
+or a description naming a different motorcycle is caught rather than published.
 
 ## Daily operation
 
 The scheduled task runs this each morning:
 
 ```bash
-python ims-ads.py run
+python ims-ads.py sync
 ```
 
-It reads live inventory in discount order, skips units that are already advertised or have no photo of themselves, downloads the exact unit's photo, validates everything, and files the package into `ready/` or `issues/`.
+It pulls whatever Codex pushed, verifies each package against its unit's own live listing, and files it into `ready/` or `issues/`. It publishes nothing.
+
+`run` is the alternative for `production.mode = "produce"`: it reads live inventory in discount order, skips units already advertised or with no photo of themselves, downloads the exact unit's photo, and builds the package here.
 
 ```bash
+python ims-ads.py sync
+python ims-ads.py run
+python ims-ads.py da-login
 python ims-ads.py status
 python ims-ads.py validate
 python ims-ads.py promote NAME
@@ -195,7 +221,7 @@ Every run appends to `logs/YYYY-MM-DD.log`, including the reason for every skipp
 python -m pytest
 ```
 
-80 tests, no network, no live site, running against a temporary tree — safe to run at any time. They cover the four areas that matter most:
+96 tests, no network, no live site, running against a temporary tree — safe to run at any time. They cover the four areas that matter most:
 
 - **Duplicate protection** — each of the four identifiers independently, live-folder detection, archived units not blocking, `--allow-rerun`, and the case where two units both lack a VIN and must not match each other on the blank.
 - **Publishing-state transitions** — the legal state machine, `inbox` never skipping straight to `published`, refusal to overwrite, dry-run leaving no trace, and history written on publish.
@@ -215,24 +241,36 @@ Two behaviours were found the hard way and are worth knowing before changing `in
 
 ## What is still missing
 
-Everything that does not require credentials is built, tested, and working end to end. These are the open items, shortest path first:
+Everything that does not require your sign-in is built, tested and working. Two items remain:
 
-### 1. Which platform publishes — *blocking automatic publishing*
+### 1. Dealership Accelerator page details — *blocking automatic publishing*
 
-No platform is wired, because none has been chosen. Currently `publishing.platform = "none"`, which is fully supported: the workflow stops at `ready/` and you record the publish yourself.
+DA has no posting API, so the adapter drives its UI with a real browser. It needs a
+signed-in session and the composer's page structure — and it **refuses to click
+anything while any selector is unset**, rather than guessing at a control in a live
+marketing tool.
 
-**To supply:** pick one — GoHighLevel Social Planner, Meta Graph API, or something else. Adapters are stubbed in `src/ims_ads/publishing.py`; each names the exact environment variables it needs.
+**Shortest path:**
 
-### 2. Publishing credentials — *blocking automatic publishing*
+1. Open `config/dealership-accelerator.json` and paste in two URLs from your address
+   bar: the DA sign-in page, and the page where you compose a post.
+2. Run `python ims-ads.py da-login`. A browser opens. **You** sign in — nothing is
+   typed for you, and no credential is ever written into this repo. The session is
+   saved to a profile under your home directory, outside the tree.
+3. Tell me it's open and the remaining selectors can be read off the real composer.
 
-Once a platform is chosen, put its variables in `.env` (names are in `.env.example`). For GoHighLevel that is `GHL_PRIVATE_INTEGRATION_TOKEN` and `GHL_LOCATION_ID`, from a Private Integration with the `social-media-posting.write` and `medias.write` scopes.
+Until then `python ims-ads.py doctor` lists every gap, and publishing stays manual.
 
-### 3. `assets/brand/logo.png` — *only needed for `production.mode = "produce"`*
+### 2. `assets/brand/logo.png` — *only if you switch to `produce` mode*
 
-A transparent PNG of the International Motorsports logo, about 1000px wide. There is a vector at `LOGOS/im-logo.svg` on this machine; it needs exporting to PNG because the composer cannot read SVG. Not needed at all while the mode is `validate_only`.
+A transparent PNG of the IM logo, about 1000px wide, exported from `LOGOS/im-logo.svg`
+(the composer cannot read SVG). Not needed while ChatGPT supplies the graphic.
 
-### 4. The creative-ownership decision — *see "Who makes the creative"*
+---
 
-One word: does ChatGPT supply the graphic and description, or does this system build them?
-
-Nothing above is guessed at, and nothing is stubbed in a way that could silently publish something wrong: every unimplemented path raises with the exact reason and the exact fix.
+**A note on Dealership Accelerator, recorded once and not laboured.** It is the only
+option here without an API, so posting means browser automation: it needs Chrome open
+and signed in at post time, and LeadVenture can change the page without warning. You
+chose it knowing that, and it is built. If a morning ever fails for that reason, the
+package is already sitting complete in `ready/` and can be posted by hand in a minute —
+nothing is lost.

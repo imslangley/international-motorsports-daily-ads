@@ -75,6 +75,34 @@ class GoHighLevelAdapter(Adapter):
         )
 
 
+class DealershipAcceleratorAdapter(Adapter):
+    """LeadVenture Dealership Accelerator - driven through its UI, not an API.
+
+    Needs no environment variables: the session lives in a browser profile the user
+    signs into by hand. What it does need is the page details in
+    config/dealership-accelerator.json, and it refuses to click anything until they
+    are captured from the real page.
+    """
+    name = "dealership_accelerator"
+    required_env = ()
+
+    def missing_credentials(self) -> list[str]:
+        # DA has no credentials in env; readiness is about captured page details.
+        from . import dealership_accelerator as da
+        try:
+            return da.unfilled_selectors(da.load_da_config())
+        except da.DealershipAcceleratorError:
+            return ["config/dealership-accelerator.json"]
+
+    def publish(self, unit, graphic, description, *, dry_run=False) -> PublishResult:
+        from . import dealership_accelerator as da
+        try:
+            post_url = da.publish(unit, graphic, description, dry_run=dry_run)
+        except da.DealershipAcceleratorError as exc:
+            raise PublishError(str(exc)) from exc
+        return PublishResult(platform=self.name, post_url=post_url)
+
+
 class MetaAdapter(Adapter):
     """Facebook Page + Instagram Business via the Graph API."""
     name = "meta"
@@ -89,6 +117,7 @@ class MetaAdapter(Adapter):
 
 ADAPTERS: dict[str, type[Adapter]] = {
     "none": ManualAdapter,
+    "dealership_accelerator": DealershipAcceleratorAdapter,
     "gohighlevel": GoHighLevelAdapter,
     "meta": MetaAdapter,
 }
@@ -114,6 +143,18 @@ def readiness_report(config: dict) -> list[str]:
         return lines
     adapter = get_adapter(config)
     missing = adapter.missing_credentials()
+    if platform == "dealership_accelerator":
+        if missing:
+            lines.append("Dealership Accelerator is selected. It has no API, so it is "
+                         "driven through its own UI, and these page details have not "
+                         "been captured yet:")
+            lines += [f"  - {m}" for m in missing]
+            lines.append("Fix: put the two URLs in config/dealership-accelerator.json, "
+                         "then run `python ims-ads.py da-login` and sign in.")
+        else:
+            lines.append("Dealership Accelerator is configured. Confirm the saved "
+                         "browser session is still signed in before relying on it.")
+        return lines
     if missing:
         lines.append(f"Platform '{platform}' is selected but these environment "
                      f"variables are unset: {', '.join(missing)}")

@@ -18,7 +18,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from . import copywriting, media, packaging, publishing
+from . import copywriting, intake, media, packaging, publishing
 from .core import (ConfigError, STATE_DIRS, Unit, ValidationReport, ensure_dirs,
                    get_logger, load_config, load_dotenv, money_str, setup_logging)
 from .dedupe import find_duplicates, first_eligible
@@ -189,6 +189,66 @@ def media_stem() -> str:
     return packaging.SOURCE_IMAGE_STEM
 
 
+# ----------------------------------------------------------------------- sync
+
+def cmd_sync(args, config) -> int:
+    """The ChatGPT -> Codex -> GitHub -> here path.
+
+    Pulls whatever Codex pushed, ties each supplied package to its own live listing,
+    validates it, and files it to ready/ or issues/. Publishes nothing.
+    """
+    log = get_logger()
+    ensure_dirs()
+
+    try:
+        intake.git_sync(dry_run=args.dry_run)
+    except intake.IntakeError as exc:
+        log.error("%s", exc)
+        return 2
+
+    supplied = intake.find_supplied_packages()
+    if not supplied:
+        log.info("No new packages in inbox/ awaiting intake.")
+        return 0
+
+    log.info("Taking in %d package(s) from inbox/.", len(supplied))
+    worst = 0
+
+    for pkg in supplied:
+        log.info("\n=== %s ===", pkg.name)
+        try:
+            unit = intake.intake_package(pkg, config, dry_run=args.dry_run)
+        except intake.IntakeError as exc:
+            log.error("%s", exc)
+            if not args.dry_run:
+                packaging.write_issue_note(pkg.name, [str(exc)])
+                packaging.move_package(pkg.name, "issues", reason="intake failed")
+            worst = max(worst, 1)
+            continue
+
+        if args.dry_run:
+            log.info("DRY RUN: resolved %s; skipping validation write.", unit.identity)
+            continue
+
+        report, _ = validate_package(pkg, config, allow_rerun=args.allow_rerun)
+        packaging.write_validation(pkg, report.render())
+        log.info("\n%s", report.render())
+
+        if report.ok:
+            packaging.append_approval(pkg, "Validation passed - promoted to ready/")
+            packaging.move_package(pkg.name, "ready", reason="validation passed")
+            log.info("READY: %s", pkg.name)
+        else:
+            reasons = [f"{c.name}: {c.detail}" for c in report.failures]
+            packaging.append_approval(pkg, "Validation failed - moved to issues/")
+            packaging.move_package(pkg.name, "issues", reason="validation failed")
+            packaging.write_issue_note(pkg.name, reasons)
+            log.error("BLOCKED: %s - %d failure(s). See issues/.", pkg.name, len(reasons))
+            worst = max(worst, 1)
+
+    return worst
+
+
 # ------------------------------------------------------------------- validate
 
 def cmd_validate(args, config) -> int:
@@ -352,6 +412,35 @@ def cmd_status(args, config) -> int:
     return 0
 
 
+# ------------------------------------------------------------------- da-login
+
+def cmd_da_login(args, config) -> int:
+    """Opens Dealership Accelerator in the persistent profile so you can sign in.
+
+    Nothing is typed for you and no credential is stored in this repo - the session
+    lives in a browser profile under your home directory.
+    """
+    from . import dealership_accelerator as da
+    log = get_logger()
+    try:
+        cfg = da.load_da_config()
+        da.open_login_session(cfg)
+    except da.DealershipAcceleratorError as exc:
+        log.error("%s", exc)
+        return 2
+
+    missing = da.unfilled_selectors(da.load_da_config())
+    if missing:
+        log.warning("Signed in, but these page details are still unset in "
+                    "config/dealership-accelerator.json:")
+        for item in missing:
+            log.warning("  - %s", item)
+        log.warning("Publishing stays blocked until they are captured.")
+        return 1
+    log.info("Dealership Accelerator session saved and fully configured.")
+    return 0
+
+
 # --------------------------------------------------------------------- doctor
 
 def cmd_doctor(args, config) -> int:
@@ -427,6 +516,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("run", parents=[common],
                    help="build today's package from live inventory")
+    sub.add_parser("sync", parents=[common],
+                   help="pull packages pushed by Codex, verify and file them")
 
     p_val = sub.add_parser("validate", parents=[common], help="re-check inbox packages")
     p_val.add_argument("name", nargs="?")
@@ -444,14 +535,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_arc.add_argument("--note", default="")
 
     sub.add_parser("status", parents=[common], help="what is in each state")
+    sub.add_parser("da-login", parents=[common],
+                   help="sign in to Dealership Accelerator once, by hand")
     sub.add_parser("doctor", parents=[common], help="what is still missing")
     return parser
 
 
 COMMANDS = {
-    "run": cmd_run, "validate": cmd_validate, "promote": cmd_promote,
+    "run": cmd_run, "sync": cmd_sync, "validate": cmd_validate, "promote": cmd_promote,
     "publish": cmd_publish, "archive": cmd_archive, "status": cmd_status,
-    "doctor": cmd_doctor,
+    "da-login": cmd_da_login, "doctor": cmd_doctor,
 }
 
 

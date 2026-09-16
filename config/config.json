@@ -84,8 +84,8 @@
   },
 
   "publishing": {
-    "_comment": "No platform is wired until one is chosen and credentials are supplied. 'none' means the workflow stops at ready/ and publishing is recorded manually.",
-    "platform": "none",
+    "_comment": "Dealership Accelerator has no API, so it is driven through its UI - see config/dealership-accelerator.json. Set this back to 'none' to stop at ready/ and record publishes by hand.",
+    "platform": "dealership_accelerator",
     "require_manual_approval": true
   },
 

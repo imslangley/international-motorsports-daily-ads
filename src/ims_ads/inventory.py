@@ -364,3 +364,44 @@ def enrich_unit(browser, unit: Unit, inv: dict) -> None:
 
     if not unit.image_urls:
         unit.image_urls = [u for u in (data.get("dom_images") or []) if u]
+
+
+def fetch_unit_by_url(config: dict, url: str) -> Unit:
+    """Reads one specific listing and returns it as a verified Unit.
+
+    This is how a package that arrived from ChatGPT gets checked: the creative
+    claims a unit, and we go and read that unit's own live listing rather than
+    trusting the claim.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:  # pragma: no cover - environment problem
+        raise InventoryError(
+            "Playwright is not installed. Run:\n"
+            "  python -m pip install -r requirements.txt\n"
+            "  python -m playwright install chromium"
+        ) from exc
+
+    log = get_logger()
+    inv = config["inventory"]
+
+    with sync_playwright() as pw:
+        launch: dict = {"headless": bool(inv.get("headless", False))}
+        if inv.get("browser_channel"):
+            launch["channel"] = inv["browser_channel"]
+        browser = pw.chromium.launch(**launch)
+        try:
+            unit = Unit(inventory_url=url, scraped_at=utcnow_iso())
+            log.info("Reading the claimed listing: %s", url)
+            enrich_unit(browser, unit, inv)
+        finally:
+            browser.close()
+
+    if not (unit.year and unit.make):
+        raise InventoryError(
+            f"Could not read a unit from {url}.\n"
+            f"The listing may have been removed, or the URL in the description is "
+            f"wrong. Nothing was assumed about this unit."
+        )
+    unit.scraped_at = utcnow_iso()
+    return unit

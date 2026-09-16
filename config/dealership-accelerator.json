@@ -1,0 +1,38 @@
+{
+  "_comment": "Dealership Accelerator has no posting API, so the adapter drives the real UI. Everything DA-specific lives here so a LeadVenture page change is a config edit, not a code change. NO CREDENTIALS GO IN THIS FILE - the session lives in a browser profile outside the repo.",
+
+  "_how_to_fill": [
+    "1. Put the two URLs below in by hand - copy them out of your browser address bar.",
+    "2. Run: python ims-ads.py da-login    (sign in yourself; nothing is typed for you)",
+    "3. With the composer open, the selectors below can be read off the real page.",
+    "   Until every FILL-ME is replaced, publishing refuses to run rather than",
+    "   clicking a control it cannot identify."
+  ],
+
+  "urls": {
+    "login": "FILL-ME",
+    "post_composer": "FILL-ME"
+  },
+
+  "session": {
+    "_comment": "Holds live session cookies. Kept outside the repo on purpose. Blank uses ~/.ims-ads/da-profile.",
+    "profile_dir": ""
+  },
+
+  "selectors": {
+    "_comment": "CSS selectors on the DA post composer. signed_out_marker, success_marker and post_link are optional but make failures obvious instead of silent.",
+    "caption_field": "FILL-ME",
+    "image_input": "FILL-ME",
+    "submit_button": "FILL-ME",
+    "signed_out_marker": "FILL-ME",
+    "success_marker": "FILL-ME",
+    "post_link": "FILL-ME"
+  },
+
+  "timeouts": {
+    "nav_ms": 90000,
+    "action_ms": 30000,
+    "upload_ms": 15000,
+    "confirm_ms": 10000
+  }
+}

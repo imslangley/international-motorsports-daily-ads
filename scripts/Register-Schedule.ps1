@@ -4,9 +4,12 @@
     Registers (or removes) the 9:30 AM daily ad build.
 
 .DESCRIPTION
-    Runs `ims-ads.py run` every morning. The job reads live inventory, selects an
-    eligible unit, downloads that unit's own photo, validates everything and files the
-    package into ready/ or issues/. It never publishes.
+    Runs `ims-ads.py sync` every morning: pulls whatever Codex pushed to GitHub,
+    verifies each package against that unit's own live listing, and files it into
+    ready/ or issues/. It never publishes.
+
+    Use -Command run instead to have this system read the site and build the package
+    itself (production.mode = 'produce').
 
     TIME ZONE: Windows Task Scheduler fires on LOCAL time. This dealership is in
     Langley, BC, which is Pacific, so 09:30 local is 9:30 AM Pacific. If this is ever
@@ -32,6 +35,7 @@
 param(
     [string]$TaskName = 'IM Daily Social Ads',
     [string]$Time = '09:30',
+    [ValidateSet('sync','run')][string]$Command = 'sync',
     [string[]]$DaysOfWeek,
     [switch]$DryRun,
     [switch]$RunNow,
@@ -72,7 +76,11 @@ try {
     throw "Could not read -Time '$Time'. Use 24-hour HH:mm, for example 09:30."
 }
 
-$arguments = '"{0}" run' -f $entry
+# 'sync' is the live path: ChatGPT makes the creative, Codex pushes it to GitHub,
+# this pulls it, verifies it against the unit's own listing, and files it.
+# 'run' is the alternative for production.mode = 'produce', where this system reads
+# the site and builds the package itself.
+$arguments = '"{0}" {1}' -f $entry, $Command
 if ($DryRun) { $arguments += ' --dry-run' }
 
 $action = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $repo
@@ -117,7 +125,8 @@ Write-Host ''
 Write-Host 'Scheduled task registered.' -ForegroundColor Green
 Write-Host ("  Task     : {0}" -f $TaskName)
 Write-Host ("  Runs     : {0}" -f $schedule)
-Write-Host ("  Mode     : {0}" -f $(if ($DryRun) { 'DRY RUN (nothing is filed)' } else { 'live build' }))
+Write-Host ("  Command  : ims-ads.py {0}" -f $Command)
+Write-Host ("  Mode     : {0}" -f $(if ($DryRun) { 'DRY RUN (nothing is filed)' } else { 'live' }))
 Write-Host ("  Next run : {0}" -f $info.NextRunTime)
 Write-Host ("  Repo     : {0}" -f $repo)
 Write-Host ''
