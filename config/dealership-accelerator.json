@@ -1,17 +1,25 @@
 {
-  "_comment": "Dealership Accelerator has no posting API, so the adapter drives the real UI. Everything DA-specific lives here so a LeadVenture page change is a config edit, not a code change. NO CREDENTIALS GO IN THIS FILE - the session lives in a browser profile outside the repo.",
+  "_comment": "Dealership Accelerator is GoHighLevel, white-labelled by Envoke Digital. Captured from the live UI on 2026-09-16. NO CREDENTIALS IN THIS FILE - the signed-in session lives in a browser profile outside the repo.",
 
-  "_how_to_fill": [
-    "1. Put the two URLs below in by hand - copy them out of your browser address bar.",
-    "2. Run: python ims-ads.py da-login    (sign in yourself; nothing is typed for you)",
-    "3. With the composer open, the selectors below can be read off the real page.",
-    "   Until every FILL-ME is replaced, publishing refuses to run rather than",
-    "   clicking a control it cannot identify."
+  "_the_better_path": [
+    "Because DA is GoHighLevel, the LeadConnector REST API would do all of this with",
+    "no browser at all - far more reliable than driving the UI. It is blocked only",
+    "because Envoke Digital has not enabled Private Integrations on this sub-account:",
+    "Settings shows no 'Private Integrations' and no 'API Keys' entry.",
+    "Ask Envoke to enable Private Integrations for location TfYNq7UU87ZNWFKsZNRn with",
+    "the scopes social-media-posting.write and medias.write, then switch",
+    "publishing.platform to 'gohighlevel' and this whole file stops mattering."
   ],
 
+  "_comment_armed": "Selectors were captured from the live UI, but posting has NEVER been exercised end to end - doing that means publishing a real ad. While armed is false the adapter refuses to click Post and tells you what to do instead. Set it to true only after one supervised test post has gone through.",
+  "armed": false,
+
+  "location_id": "TfYNq7UU87ZNWFKsZNRn",
+
   "urls": {
-    "login": "FILL-ME",
-    "post_composer": "FILL-ME"
+    "login": "https://app.envokedigital.com/",
+    "post_composer": "https://app.envokedigital.com/v2/location/TfYNq7UU87ZNWFKsZNRn/marketing/social-planner/post",
+    "planner": "https://app.envokedigital.com/v2/location/TfYNq7UU87ZNWFKsZNRn/marketing/social-planner"
   },
 
   "session": {
@@ -20,19 +28,45 @@
   },
 
   "selectors": {
-    "_comment": "CSS selectors on the DA post composer. signed_out_marker, success_marker and post_link are optional but make failures obvious instead of silent.",
-    "caption_field": "FILL-ME",
-    "image_input": "FILL-ME",
-    "submit_button": "FILL-ME",
-    "signed_out_marker": "FILL-ME",
-    "success_marker": "FILL-ME",
-    "post_link": "FILL-ME"
+    "_comment": "The sp-cmp-* ids are GoHighLevel component ids and are stabler than class names. ORDER MATTERS - see _sequence below.",
+    "account_picker": "#sp-cmp-social-select-trigger-select",
+    "caption_field": "#quill-editor .ql-editor",
+    "caption_enabled_check": "#quill-editor:not(.ql-disabled)",
+    "image_input": "#image_uploads",
+    "submit_button": "#sp-cmp-post-action-btn-post-options",
+    "save_draft_button": "#sp-cmp-post-action-btn-save-draft",
+    "signed_out_marker": "input[type=password]",
+    "success_marker": "",
+    "post_link": ""
+  },
+
+  "_sequence": [
+    "1. Load urls.post_composer.",
+    "2. Click account_picker and choose the target social accounts. The caption editor",
+    "   is a Quill instance that ships DISABLED (ql-disabled, contenteditable=false)",
+    "   and the Post button ships disabled - BOTH only unlock once an account is",
+    "   selected. A script that types first silently writes nothing.",
+    "3. Type the caption with real keystrokes, not by setting innerText: Quill keeps",
+    "   its own document model and ignores direct DOM writes.",
+    "4. Upload the graphic through image_input (hidden input, set_input_files works).",
+    "5. submit_button is labelled 'Post' and carries a dropdown ('post-options'),",
+    "   which is where scheduling lives.",
+    "",
+    "success_marker and post_link are intentionally EMPTY: confirming them means",
+    "publishing a real post, which has not been done. Until they are filled the",
+    "adapter cannot verify a post succeeded - it will say so rather than assume."
+  ],
+
+  "accounts": {
+    "_comment": "Which connected social accounts to post to, by their display name in the picker. Empty means every connected account. Fill after confirming the names in the picker.",
+    "targets": []
   },
 
   "timeouts": {
     "nav_ms": 90000,
     "action_ms": 30000,
-    "upload_ms": 15000,
+    "editor_enable_ms": 20000,
+    "upload_ms": 30000,
     "confirm_ms": 10000
   }
 }

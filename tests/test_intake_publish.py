@@ -7,6 +7,7 @@ publishing tests assert on refusals, which is the behaviour that matters most.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from PIL import Image
@@ -95,25 +96,48 @@ def test_a_foreign_url_in_the_description_is_not_treated_as_the_listing(workspac
 
 # ------------------------------------------------------- publishing refusals
 
-def test_dealership_accelerator_refuses_while_selectors_are_placeholders(workspace):
-    """The rule that matters: never click an unidentified control in a live tool."""
-    adapter = publishing.ADAPTERS["dealership_accelerator"]()
-    missing = adapter.missing_credentials()
-    assert missing, "shipped config must still be placeholders"
+def test_dealership_accelerator_refuses_while_not_armed(workspace):
+    """The rule that matters: the post path has never been exercised end to end,
+    so it must refuse rather than assume clicking Post works."""
+    from ims_ads import dealership_accelerator as da
 
-    with pytest.raises(publishing.PublishError, match="never been captured"):
+    cfg = da.load_da_config()
+    assert da.unfilled_selectors(cfg) == [], "selectors were captured from the live UI"
+    assert not da.is_armed(cfg), "shipped config must not be armed"
+
+    adapter = publishing.ADAPTERS["dealership_accelerator"]()
+    with pytest.raises(publishing.PublishError, match="NOT ARMED"):
         adapter.publish(make_unit(), workspace / "graphic.png", "copy")
 
 
-def test_dealership_accelerator_refusal_names_every_gap(workspace):
+def test_dealership_accelerator_refusal_explains_how_to_go_live(workspace):
     adapter = publishing.ADAPTERS["dealership_accelerator"]()
     try:
         adapter.publish(make_unit(), workspace / "g.png", "copy")
     except publishing.PublishError as exc:
         message = str(exc)
-    assert "urls.post_composer" in message
-    assert "selectors.submit_button" in message
-    assert "da-login" in message
+    assert "armed" in message
+    assert "success_marker" in message
+    assert "GoHighLevel" in message, "the better path should be named in the refusal"
+
+
+def test_missing_required_selector_is_reported(workspace):
+    """Guard against a selector being blanked by a bad edit."""
+    from ims_ads import dealership_accelerator as da
+
+    cfg = da.load_da_config()
+    cfg["selectors"]["caption_field"] = ""
+    assert "selectors.caption_field" in da.unfilled_selectors(cfg)
+
+
+def test_optional_markers_are_not_treated_as_missing(workspace):
+    """success_marker and post_link are knowingly empty and must not block config
+    checks - they can only be filled by observing a real successful post."""
+    from ims_ads import dealership_accelerator as da
+
+    cfg = da.load_da_config()
+    assert cfg["selectors"]["success_marker"] == ""
+    assert da.unfilled_selectors(cfg) == []
 
 
 def test_manual_platform_refuses_and_says_what_to_do(workspace):
@@ -129,13 +153,13 @@ def test_unknown_platform_is_rejected(workspace, config):
         publishing.get_adapter(config)
 
 
-def test_readiness_report_explains_the_dealership_accelerator_gap(workspace, config):
+def test_readiness_report_explains_the_dealership_accelerator_state(workspace, config):
     config = dict(config)
     config["publishing"] = dict(config["publishing"],
                                 platform="dealership_accelerator")
     lines = "\n".join(publishing.readiness_report(config))
-    assert "no API" in lines
-    assert "da-login" in lines
+    assert "NOT ARMED" in lines
+    assert "GoHighLevel" in lines
 
 
 def test_shipped_da_config_contains_no_credentials(workspace):
@@ -150,6 +174,10 @@ def test_shipped_da_config_contains_no_credentials(workspace):
                  "api_key", "bearer", "authorization")
     offenders: list[str] = []
 
+    def looks_like_a_token(value: str) -> bool:
+        """A long unbroken run of random-looking characters."""
+        return bool(re.fullmatch(r"[A-Za-z0-9_\-]{32,}", value.strip()))
+
     def walk(node, path=""):
         if isinstance(node, dict):
             for key, value in node.items():
@@ -160,8 +188,13 @@ def test_shipped_da_config_contains_no_credentials(workspace):
                     offenders.append(f"key {here}")
                 walk(value, here)
         elif isinstance(node, str):
-            lowered = node.lower()
-            if any(word in lowered for word in forbidden):
+            # CSS selectors legitimately contain words like 'password'
+            # (input[type=password] is how a login wall is detected).
+            if path.startswith("selectors"):
+                if looks_like_a_token(node):
+                    offenders.append(f"token-shaped value at {path}")
+                return
+            if any(word in node.lower() for word in forbidden) or looks_like_a_token(node):
                 offenders.append(f"value at {path}")
 
     walk(json.loads(da.CONFIG_FILE.read_text(encoding="utf-8")))

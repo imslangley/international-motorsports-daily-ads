@@ -144,16 +144,30 @@ def readiness_report(config: dict) -> list[str]:
     adapter = get_adapter(config)
     missing = adapter.missing_credentials()
     if platform == "dealership_accelerator":
+        from . import dealership_accelerator as da
         if missing:
             lines.append("Dealership Accelerator is selected. It has no API, so it is "
-                         "driven through its own UI, and these page details have not "
-                         "been captured yet:")
+                         "driven through its own UI, and these page details are not "
+                         "captured yet:")
             lines += [f"  - {m}" for m in missing]
-            lines.append("Fix: put the two URLs in config/dealership-accelerator.json, "
-                         "then run `python ims-ads.py da-login` and sign in.")
+            lines.append("Fix: run `python ims-ads.py da-login` and capture them.")
+            return lines
+        try:
+            armed = da.is_armed(da.load_da_config())
+        except da.DealershipAcceleratorError:
+            armed = False
+        if not armed:
+            lines.append("Dealership Accelerator page details are captured, but "
+                         "publishing is NOT ARMED - a post has never been put through "
+                         "this path end to end, so it refuses rather than assuming.")
+            lines.append("Fix: post one package by hand, then set \"armed\": true in "
+                         "config/dealership-accelerator.json.")
         else:
-            lines.append("Dealership Accelerator is configured. Confirm the saved "
-                         "browser session is still signed in before relying on it.")
+            lines.append("Dealership Accelerator is armed. Confirm the saved browser "
+                         "session is still signed in before relying on it.")
+        lines.append("Note: Dealership Accelerator IS GoHighLevel (white-labelled by "
+                     "Envoke Digital). Getting Envoke to enable Private Integrations "
+                     "would let this use the API and drop the browser entirely.")
         return lines
     if missing:
         lines.append(f"Platform '{platform}' is selected but these environment "

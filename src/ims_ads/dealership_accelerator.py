@@ -50,21 +50,34 @@ def load_da_config() -> dict:
         raise DealershipAcceleratorError(f"{CONFIG_FILE} is not valid JSON: {exc}") from exc
 
 
+# Everything the post flow actually needs. success_marker and post_link are
+# deliberately excluded: confirming them means publishing a real post, which has not
+# been done, so they stay empty rather than being guessed at.
+REQUIRED_PATHS = (
+    "urls.login",
+    "urls.post_composer",
+    "selectors.account_picker",
+    "selectors.caption_field",
+    "selectors.image_input",
+    "selectors.submit_button",
+)
+
+
 def unfilled_selectors(cfg: dict) -> list[str]:
-    """Every selector still set to FILL-ME, so all gaps are reported at once."""
+    """Required settings that are still FILL-ME or empty, reported all at once."""
     missing = []
-
-    def walk(node, path=""):
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key.startswith("_"):
-                    continue
-                walk(value, f"{path}.{key}" if path else key)
-        elif isinstance(node, str) and node.strip() == PLACEHOLDER:
+    for path in REQUIRED_PATHS:
+        node: object = cfg
+        for part in path.split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        if not isinstance(node, str) or not node.strip() or node.strip() == PLACEHOLDER:
             missing.append(path)
-
-    walk(cfg)
     return missing
+
+
+def is_armed(cfg: dict) -> bool:
+    """Posting is refused until a supervised test post has been done and this is set."""
+    return bool(cfg.get("armed"))
 
 
 def profile_dir(cfg: dict) -> Path:
@@ -142,11 +155,12 @@ def session_is_live(cfg: dict) -> bool:
 
 def publish(unit: Unit, graphic: Path, description: str, *,
             dry_run: bool = False) -> str:
-    """Posts one package through the DA UI. Returns the post URL when DA gives one.
+    """Posts one package through the DA (GoHighLevel) Social Planner UI.
 
-    Refuses to run while any selector is still FILL-ME. Clicking an unverified
-    control in a live marketing tool is exactly the kind of guess that publishes
-    the wrong thing.
+    The order below is not arbitrary. The caption editor is a Quill instance that
+    ships disabled (`ql-disabled`, contenteditable="false") and the Post button ships
+    disabled; both unlock only after a social account is chosen. A script that types
+    first writes nothing at all, and does it silently.
     """
     from playwright.sync_api import sync_playwright
 
@@ -156,21 +170,34 @@ def publish(unit: Unit, graphic: Path, description: str, *,
     missing = unfilled_selectors(cfg)
     if missing:
         raise DealershipAcceleratorError(
-            "Dealership Accelerator is selected, but its page details have never "
-            "been captured, so there is nothing safe to click.\n\n"
-            "Still unset in config/dealership-accelerator.json:\n"
+            "Dealership Accelerator page details are incomplete, so there is nothing "
+            "safe to click.\n"
             + "\n".join(f"  - {m}" for m in missing)
-            + "\n\nRun `python ims-ads.py da-login`, sign in, and the selectors can "
-              "be read off the real page. Until then publishing.platform should stay "
-              "'none' and posts go out by hand from ready/."
+            + "\n\nRun `python ims-ads.py da-login` and capture them from the composer."
         )
 
-    urls = cfg["urls"]
-    sel = cfg["selectors"]
-    timeout = int(cfg.get("timeouts", {}).get("action_ms", 30000))
+    if not is_armed(cfg):
+        raise DealershipAcceleratorError(
+            "Dealership Accelerator publishing is NOT ARMED, so nothing was posted.\n\n"
+            "The selectors were read off the live composer, but a post has never been "
+            "put through this path end to end - verifying that means publishing a real "
+            "ad to your accounts. So it refuses rather than assuming it works.\n\n"
+            "To go live:\n"
+            "  1. Post one package from ready/ by hand, watching each step.\n"
+            '  2. Set "armed": true in config/dealership-accelerator.json.\n'
+            "  3. Fill selectors.success_marker with something that appears only after "
+            "a successful post, so a failure is detected rather than assumed.\n\n"
+            "Better still: ask Envoke Digital to enable Private Integrations on "
+            f"location {cfg.get('location_id', '')} and switch publishing.platform to "
+            "'gohighlevel'. Dealership Accelerator IS GoHighLevel, and the API needs "
+            "no browser at all."
+        )
+
+    urls, sel = cfg["urls"], cfg["selectors"]
+    t = cfg.get("timeouts", {})
 
     if dry_run:
-        log.info("DRY RUN: would post %s to Dealership Accelerator (%s)",
+        log.info("DRY RUN: would post %s via the DA composer (%s)",
                  unit.identity, urls["post_composer"])
         return ""
 
@@ -181,8 +208,8 @@ def publish(unit: Unit, graphic: Path, description: str, *,
         try:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.goto(urls["post_composer"], wait_until="domcontentloaded",
-                      timeout=int(cfg.get("timeouts", {}).get("nav_ms", 90000)))
-            page.wait_for_timeout(3000)
+                      timeout=int(t.get("nav_ms", 90000)))
+            page.wait_for_timeout(5000)
 
             if sel.get("signed_out_marker") and page.query_selector(sel["signed_out_marker"]):
                 raise DealershipAcceleratorError(
@@ -190,26 +217,73 @@ def publish(unit: Unit, graphic: Path, description: str, *,
                     "Run `python ims-ads.py da-login` and sign in again."
                 )
 
-            log.info("Filling the DA composer for %s", unit.identity)
-            page.wait_for_selector(sel["caption_field"], timeout=timeout)
-            page.fill(sel["caption_field"], description)
+            # 1. Choose the social accounts. This is what unlocks everything else.
+            targets = cfg.get("accounts", {}).get("targets") or []
+            if not targets:
+                raise DealershipAcceleratorError(
+                    "accounts.targets is empty in config/dealership-accelerator.json, "
+                    "so no social account would be selected - and with none selected "
+                    "the caption editor stays disabled and the post would be empty.\n\n"
+                    "List the accounts to post to, exactly as they appear in the "
+                    "composer's 'Select a social account' picker, for example:\n"
+                    '  "targets": ["International Motorsports", "@intlmotorsports"]'
+                )
 
+            log.info("Selecting %d social account(s)", len(targets))
+            page.click(sel["account_picker"], timeout=int(t.get("action_ms", 30000)))
+            page.wait_for_timeout(1500)
+            for name in targets:
+                try:
+                    page.get_by_text(name, exact=False).first.click(
+                        timeout=int(t.get("action_ms", 30000)))
+                except Exception as exc:
+                    raise DealershipAcceleratorError(
+                        f"No account matching '{name}' in the picker. Check "
+                        f"accounts.targets against the names shown in the composer."
+                    ) from exc
+                page.wait_for_timeout(500)
+            page.keyboard.press("Escape")
+
+            # 2. Wait for Quill to actually enable before typing into it.
+            check = sel.get("caption_enabled_check") or sel["caption_field"]
+            try:
+                page.wait_for_selector(check, state="attached",
+                                       timeout=int(t.get("editor_enable_ms", 20000)))
+            except Exception as exc:
+                raise DealershipAcceleratorError(
+                    "The caption editor never enabled, which means no social account "
+                    "was actually selected. Check accounts.targets in "
+                    "config/dealership-accelerator.json against the names in the picker."
+                ) from exc
+
+            # 3. Real keystrokes: Quill keeps its own document model and ignores
+            #    direct DOM writes, so fill()/innerText would leave the post empty.
+            log.info("Typing the caption (%d chars)", len(description))
+            page.click(sel["caption_field"], timeout=int(t.get("action_ms", 30000)))
+            page.type(sel["caption_field"], description, delay=1)
+
+            # 4. The graphic. The file input is hidden; set_input_files handles that.
+            log.info("Uploading %s", graphic.name)
             page.set_input_files(sel["image_input"], str(graphic))
-            page.wait_for_timeout(int(cfg.get("timeouts", {}).get("upload_ms", 15000)))
+            page.wait_for_timeout(int(t.get("upload_ms", 30000)))
 
-            # The submit control is clicked last and only once.
-            page.click(sel["submit_button"], timeout=timeout)
-            page.wait_for_timeout(int(cfg.get("timeouts", {}).get("confirm_ms", 10000)))
+            # 5. Post, once.
+            page.click(sel["submit_button"], timeout=int(t.get("action_ms", 30000)))
+            page.wait_for_timeout(int(t.get("confirm_ms", 10000)))
 
             if sel.get("success_marker"):
-                page.wait_for_selector(sel["success_marker"], timeout=timeout)
+                page.wait_for_selector(sel["success_marker"],
+                                       timeout=int(t.get("action_ms", 30000)))
+            else:
+                log.warning("No success_marker configured - the post was submitted but "
+                            "success could not be confirmed. Check the Planner.")
 
             post_url = ""
             if sel.get("post_link"):
                 node = page.query_selector(sel["post_link"])
                 if node:
                     post_url = node.get_attribute("href") or ""
-            log.info("Posted to Dealership Accelerator%s",
+            log.info("Submitted to Dealership Accelerator%s",
                      f" -> {post_url}" if post_url else "")
             return post_url
         finally:
