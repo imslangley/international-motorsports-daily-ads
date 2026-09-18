@@ -201,6 +201,46 @@ To schedule it, from PowerShell in this folder:
 
 Use `-DryRun` to schedule a dry run for the first week, and `-Unregister` to remove it. **Task Scheduler fires on local time**; the dealership is in Pacific, so 09:30 local is 9:30 AM Pacific. On a machine in another zone, adjust `-Time`.
 
+## The morning routine
+
+**Before 9:15 AM Pacific, tell Codex: _"do today's ad"_.** That is the only human
+step. Codex reads [`AGENTS.md`](AGENTS.md), picks the next eligible unit, builds the
+package and pushes it to `inbox/`.
+
+At 9:30 the scheduled task runs `sync`, and repeats every 30 minutes until noon so a
+late push is still caught. Each morning it writes a plain-English summary to:
+
+```
+logs/daily-report-YYYY-MM-DD.log
+```
+
+That file is the one to read. It says either *"Nothing from Codex yet today"*, or, for
+each package, the unit, the price, every failed check, and the result.
+
+### The dry-run week
+
+For the first week the task runs with `--dry-run`. It still pulls from GitHub and
+still validates every package fully against the live listing — on a throwaway copy —
+but files nothing: packages stay in `inbox/` and the report says *WOULD BE READY TO
+POST* or *WOULD BE BLOCKED*. Because nothing is recorded, Codex will see the earlier
+packages in `inbox/` and move on to the next unit each day, which exercises more of
+the inventory.
+
+**Before switching to live,** clear `inbox/` of the test-week packages, then:
+
+```powershell
+.\scripts\Register-Schedule.ps1
+```
+
+### A safety stop worth knowing about
+
+Codex has write access to `main`, and this job runs whatever code is on `main`. So if
+a pull ever changes `src/`, `config/`, `scripts/`, `tests/` or `ims-ads.py`, that
+morning's run **stops** and the report says why, rather than executing unreviewed
+changes — for example a push that set `armed` to `true`. Codex is instructed to only
+ever add folders under `inbox/`. If a change is intended, run once with
+`--accept-code-changes`.
+
 ## Recovery
 
 | Situation | What to do |

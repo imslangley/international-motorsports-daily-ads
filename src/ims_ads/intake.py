@@ -39,21 +39,39 @@ class IntakeError(RuntimeError):
 
 # ---------------------------------------------------------------------- git
 
-def git_sync(*, dry_run: bool = False) -> str:
-    """Pulls whatever Codex pushed. Read-only against the remote."""
-    log = get_logger()
-    if dry_run:
-        log.info("DRY RUN: would run git pull --ff-only")
-        return "skipped"
+# Paths that decide what this job DOES. Codex has write access to main, and the
+# 09:30 task executes whatever is on main - so a pull that changes any of these is
+# not run blindly. Codex's job is to add folders to inbox/, nothing else.
+PROTECTED_PATHS = ("src/", "config/", "scripts/", "tests/", "ims-ads.py",
+                   "requirements.txt", "pytest.ini", ".gitignore")
+
+
+def _git(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
     try:
-        result = subprocess.run(
-            ["git", "pull", "--ff-only"], cwd=str(REPO_ROOT),
-            capture_output=True, text=True, timeout=120)
+        return subprocess.run(["git", *args], cwd=str(REPO_ROOT),
+                              capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as exc:
         raise IntakeError("git is not on PATH, so the repo cannot be synced.") from exc
     except subprocess.TimeoutExpired as exc:
-        raise IntakeError("git pull timed out after 120s.") from exc
+        raise IntakeError(f"git {args[0]} timed out after {timeout}s.") from exc
 
+
+def protected_changes(paths: list[str]) -> list[str]:
+    """The subset of changed paths that alter code or configuration."""
+    return [p for p in paths
+            if any(p == guard or p.startswith(guard) for guard in PROTECTED_PATHS)]
+
+
+def git_sync(*, accept_code_changes: bool = False) -> list[str]:
+    """Fast-forwards to whatever was pushed. Returns the paths that changed.
+
+    Runs on dry runs too: a fast-forward only brings in what is already on GitHub,
+    and a dry run that skipped it would never see what Codex pushed.
+    """
+    log = get_logger()
+    before = _git("rev-parse", "HEAD").stdout.strip()
+
+    result = _git("pull", "--ff-only")
     output = (result.stdout + result.stderr).strip()
     if result.returncode != 0:
         raise IntakeError(
@@ -61,8 +79,31 @@ def git_sync(*, dry_run: bool = False) -> str:
             f"If this is a diverged history, resolve it by hand - this tool will not "
             f"rewrite or discard commits."
         )
-    log.info("git pull: %s", output.splitlines()[-1] if output else "already up to date")
-    return output
+
+    after = _git("rev-parse", "HEAD").stdout.strip()
+    if before == after:
+        log.info("git pull: already up to date")
+        return []
+
+    changed = [line for line in
+               _git("diff", "--name-only", before, after).stdout.splitlines() if line]
+    log.info("git pull: %s -> %s, %d path(s) changed", before[:7], after[:7], len(changed))
+
+    touched = protected_changes(changed)
+    if touched and not accept_code_changes:
+        raise IntakeError(
+            "The pull changed code or configuration, so today's run was stopped "
+            "rather than executing it unreviewed:\n"
+            + "\n".join(f"  - {p}" for p in touched)
+            + f"\n\nCodex should only ever add folders under inbox/. Review with:\n"
+              f"  git log -p {before[:7]}..{after[:7]} -- "
+            + " ".join(touched)
+            + "\nIf the change is intended, run once with --accept-code-changes."
+        )
+    if touched:
+        log.warning("Running despite code/config changes (--accept-code-changes): %s",
+                    ", ".join(touched))
+    return changed
 
 
 # ------------------------------------------------------------------ resolve

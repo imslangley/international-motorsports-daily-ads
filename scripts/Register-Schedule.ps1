@@ -37,6 +37,8 @@ param(
     [string]$Time = '09:30',
     [ValidateSet('sync','run')][string]$Command = 'sync',
     [string[]]$DaysOfWeek,
+    [int]$RepeatEveryMinutes = 30,
+    [string]$RepeatUntil = '12:00',
     [switch]$DryRun,
     [switch]$RunNow,
     [switch]$Unregister
@@ -91,6 +93,24 @@ if ($DaysOfWeek) {
 } else {
     $trigger = New-ScheduledTaskTrigger -Daily -At $at
     $schedule = 'every day at {0} local' -f $at.ToString('HH:mm')
+}
+
+# Codex pushes whenever someone asks it to, which will not always be before 09:30.
+# Repeating until noon catches a late push the same morning. Repeats are cheap and
+# safe: sync only takes in packages it has not already processed, and never posts.
+if ($RepeatEveryMinutes -gt 0) {
+    try {
+        $until = [datetime]::ParseExact($RepeatUntil, 'HH:mm', [Globalization.CultureInfo]::InvariantCulture)
+    } catch {
+        throw "Could not read -RepeatUntil '$RepeatUntil'. Use 24-hour HH:mm, for example 12:00."
+    }
+    $window = $until - $at
+    if ($window.TotalMinutes -gt 0) {
+        $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At $at `
+            -RepetitionInterval (New-TimeSpan -Minutes $RepeatEveryMinutes) `
+            -RepetitionDuration $window).Repetition
+        $schedule += ', repeating every {0} min until {1}' -f $RepeatEveryMinutes, $until.ToString('HH:mm')
+    }
 }
 
 # StartWhenAvailable is ON: unlike a social post, a missed ad build is worth running

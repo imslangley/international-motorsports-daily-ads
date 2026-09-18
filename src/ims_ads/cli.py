@@ -191,80 +191,144 @@ def media_stem() -> str:
 
 # ----------------------------------------------------------------------- sync
 
+def _daily_report_path() -> Path:
+    from .core import LOGS
+    return LOGS / f"daily-report-{dt.date.today():%Y-%m-%d}.log"
+
+
+def _report(line: str) -> None:
+    """Appends to today's plain-English report - the file to read during the
+    dry-run week. The full technical log is logs/YYYY-MM-DD.log."""
+    path = _daily_report_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+
+
+def _already_reported_today(name: str) -> bool:
+    path = _daily_report_path()
+    return path.exists() and f"=== {name}" in path.read_text(encoding="utf-8")
+
+
 def cmd_sync(args, config) -> int:
     """The ChatGPT -> Codex -> GitHub -> here path.
 
     Pulls whatever Codex pushed, ties each supplied package to its own live listing,
     validates it, and files it to ready/ or issues/. Publishes nothing.
+
+    In --dry-run the pull and the full validation still happen - a dry run that
+    skipped them would never see what Codex pushed and would test nothing. The
+    difference is that validation runs on a throwaway copy, and the package is left
+    exactly where it is in inbox/.
     """
     log = get_logger()
     ensure_dirs()
+    stamp = dt.datetime.now().strftime("%H:%M")
+    mode = "DRY RUN" if args.dry_run else "LIVE"
 
     try:
-        intake.git_sync(dry_run=args.dry_run)
+        changed = intake.git_sync(accept_code_changes=args.accept_code_changes)
     except intake.IntakeError as exc:
         log.error("%s", exc)
+        _report(f"{stamp}  [{mode}] STOPPED: {str(exc).splitlines()[0]}")
         return 2
+    if changed:
+        log.info("Pulled %d changed path(s) from GitHub.", len(changed))
 
-    supplied = intake.find_supplied_packages()
+    supplied = [p for p in intake.find_supplied_packages()
+                if not (args.dry_run and _already_reported_today(p.name))]
     if not supplied:
         log.info("No new packages in inbox/ awaiting intake.")
+        if not _daily_report_path().exists():
+            _report(f"{stamp}  [{mode}] Nothing from Codex yet today.")
         return 0
 
     log.info("Taking in %d package(s) from inbox/.", len(supplied))
     worst = 0
 
-    for pkg in supplied:
-        log.info("\n=== %s ===", pkg.name)
+    for original in supplied:
+        log.info("\n=== %s ===", original.name)
+        _report(f"\n=== {original.name}   ({stamp}, {mode})")
 
-        # An incomplete folder is reported, never skipped. Silently ignoring one
-        # means a bad push sits in inbox/ unnoticed and the day produces nothing.
-        gaps = intake.missing_required_files(pkg)
-        if gaps:
-            log.error("%s is not a complete package - missing %s",
-                      pkg.name, ", ".join(gaps))
-            if not args.dry_run:
-                packaging.write_issue_note(pkg.name, [
-                    *(f"missing required file: {g}" for g in gaps),
-                    "A package needs graphic.png (exactly 1080x1080) and "
-                    "description.txt containing the unit's inventory URL.",
-                    "See docs/example-package/ for the exact shape."])
-                packaging.move_package(pkg.name, "issues",
-                                       reason="incomplete package")
-            worst = max(worst, 1)
-            continue
+        # A dry run works on a copy, so the real package is never touched.
+        if args.dry_run:
+            scratch = Path(tempfile.mkdtemp(prefix="ims-ads-sync-")) / original.name
+            shutil.copytree(original, scratch)
+            pkg = scratch
+        else:
+            pkg = original
 
         try:
-            unit = intake.intake_package(pkg, config, dry_run=args.dry_run)
-        except intake.IntakeError as exc:
-            log.error("%s", exc)
-            if not args.dry_run:
-                packaging.write_issue_note(pkg.name, [str(exc)])
-                packaging.move_package(pkg.name, "issues", reason="intake failed")
-            worst = max(worst, 1)
-            continue
-
-        if args.dry_run:
-            log.info("DRY RUN: resolved %s; skipping validation write.", unit.identity)
-            continue
-
-        report, _ = validate_package(pkg, config, allow_rerun=args.allow_rerun)
-        packaging.write_validation(pkg, report.render())
-        log.info("\n%s", report.render())
-
-        if report.ok:
-            packaging.append_approval(pkg, "Validation passed - promoted to ready/")
-            packaging.move_package(pkg.name, "ready", reason="validation passed")
-            log.info("READY: %s", pkg.name)
-        else:
-            reasons = [f"{c.name}: {c.detail}" for c in report.failures]
-            packaging.append_approval(pkg, "Validation failed - moved to issues/")
-            packaging.move_package(pkg.name, "issues", reason="validation failed")
-            packaging.write_issue_note(pkg.name, reasons)
-            log.error("BLOCKED: %s - %d failure(s). See issues/.", pkg.name, len(reasons))
-            worst = max(worst, 1)
+            worst = max(worst, _take_in(args, config, pkg, original.name))
+        finally:
+            if args.dry_run:
+                shutil.rmtree(pkg.parent, ignore_errors=True)
 
     return worst
+
+
+def _take_in(args, config, pkg: Path, name: str) -> int:
+    """Intake, validation and filing for one package. Returns 0 on success."""
+    log = get_logger()
+    live = not args.dry_run
+
+    # An incomplete folder is reported, never skipped. Silently ignoring one means
+    # a bad push sits in inbox/ unnoticed and the day produces nothing.
+    gaps = intake.missing_required_files(pkg)
+    if gaps:
+        log.error("%s is not a complete package - missing %s", name, ", ".join(gaps))
+        _report(f"  RESULT: BLOCKED - missing {', '.join(gaps)}")
+        if live:
+            packaging.write_issue_note(name, [
+                *(f"missing required file: {g}" for g in gaps),
+                "A package needs graphic.png (exactly 1080x1080) and "
+                "description.txt containing the unit's inventory URL.",
+                "See docs/example-package/ for the exact shape."])
+            packaging.move_package(name, "issues", reason="incomplete package")
+        return 1
+
+    try:
+        # Intake writes listing.json and downloads the exact-unit photo. On a dry
+        # run `pkg` is a throwaway copy, so it is safe to let it write.
+        unit = intake.intake_package(pkg, config, dry_run=False)
+    except intake.IntakeError as exc:
+        log.error("%s", exc)
+        _report(f"  RESULT: BLOCKED - {str(exc).splitlines()[0]}")
+        if live:
+            packaging.write_issue_note(name, [str(exc)])
+            packaging.move_package(name, "issues", reason="intake failed")
+        return 1
+
+    _report(f"  Unit: {unit.identity}  |  sale {money_str(unit.sale_price)}  "
+            f"save {money_str(unit.savings)}")
+
+    report, _ = validate_package(pkg, config, allow_rerun=args.allow_rerun)
+    log.info("\n%s", report.render())
+    for check in report.failures:
+        _report(f"  FAIL  {check.name}: {check.detail}")
+    for check in report.warnings:
+        _report(f"  warn  {check.name}: {check.detail}")
+
+    if not live:
+        _report(f"  RESULT: {'WOULD BE READY TO POST' if report.ok else 'WOULD BE BLOCKED'}"
+                f" (dry run - nothing was filed)")
+        return 0 if report.ok else 1
+
+    packaging.write_validation(pkg, report.render())
+    if report.ok:
+        packaging.append_approval(pkg, "Validation passed - promoted to ready/")
+        packaging.move_package(name, "ready", reason="validation passed")
+        log.info("READY: %s", name)
+        _report("  RESULT: READY TO POST")
+        return 0
+
+    reasons = [f"{c.name}: {c.detail}" for c in report.failures]
+    packaging.append_approval(pkg, "Validation failed - moved to issues/")
+    packaging.move_package(name, "issues", reason="validation failed")
+    packaging.write_issue_note(name, reasons)
+    log.error("BLOCKED: %s - %d failure(s). See issues/.", name, len(reasons))
+    _report("  RESULT: BLOCKED - see issues/")
+    return 1
 
 
 # ------------------------------------------------------------------- validate
@@ -526,6 +590,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--verbose", "-v", action="store_true")
     common.add_argument("--allow-rerun", action="store_true",
                         help="permit a documented duplicate re-run")
+    common.add_argument("--accept-code-changes", action="store_true",
+                        help="run sync even though the pull changed code or config")
 
     parser = argparse.ArgumentParser(
         prog="ims-ads", parents=[common],
@@ -572,7 +638,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.command:
         parser.print_help()
         return 0
-    for attr, default in (("name", None), ("post_url", ""), ("note", "")):
+    for attr, default in (("name", None), ("post_url", ""), ("note", ""),
+                          ("accept_code_changes", False)):
         if not hasattr(args, attr):
             setattr(args, attr, default)
 
